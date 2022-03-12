@@ -15,7 +15,8 @@ I started making a machine for pulling a ribbon from PET bottles into a rod for 
 I decided that maybe it would be a good practice for me to try to write my own firmware. And so that there are no more questions - I took instead of arduino nano - esp8266. The author of the machine does not have firmware for this controller, and the microcontroller itself is currently in short supply of semiconductors - cheaper than Arduino nano. 
 
 
-// ================ BUTTON ================
+================ BUTTON ================
+
 bool busy();        // вернёт true, если всё ещё нужно вызывать tick для опроса таймаутов
 bool state();       // текущее состояние кнопки (true нажата, false не нажата)
 bool press();       // кнопка была нажата [однократное срабатывание]
