@@ -16,7 +16,17 @@ I decided that maybe it would be a good practice for me to try to write my own f
 
 Compiling sketch in Arduino IDE
 
-#### Sone info about libraries and functions
+#### TaskList
+
+- [x] Управление кнопками
+- [ ] Сохранение настроек и загрузка их при включении
+- [ ] Подключение термистора
+- [ ] Считывание данных с термистора
+- [ ] Подключение мотора
+- [ ] Подключение нагревателя
+- [ ] Настройка PID
+
+#### Some info about libraries and functions
 
 #### EncButton by AlexGyver
 
