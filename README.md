@@ -28,7 +28,7 @@ Compiling sketch in Arduino IDE
 
 #### Some info about libraries and functions
 
-#### EncButton by AlexGyver
+##### EncButton by AlexGyver
 
 ```cpp
 bool busy();        // вернёт true, если всё ещё нужно вызывать tick для опроса таймаутов
