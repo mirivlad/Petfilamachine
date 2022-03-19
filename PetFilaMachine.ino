@@ -1,6 +1,29 @@
 //enable 2040 LCD
 #include <LiquidCrystal_I2C.h>
 LiquidCrystal_I2C lcd(0x27,20,4);  // set the LCD address to 0x27 for a 16 chars and 2 line display
+
+// Make custom characters:
+byte motor_char_1[] = {
+  B00111,
+  B01000,
+  B10110,
+  B10101,
+  B10100,
+  B10100,
+  B01000,
+  B00111
+};
+byte motor_char_2[] = {
+  B11100,
+  B00010,
+  B01101,
+  B10101,
+  B00101,
+  B00101,
+  B00010,
+  B11100
+};
+
 //enable NTC thermistor
 #include <GyverNTC.h>
 // термистор на пине А0
@@ -22,6 +45,15 @@ int t_set=230;
 int t_set_temp=230;
 int motor_speed=100;
 int motor_speed_temp=100;
+int motor_state = 0;//0 - off, 1 - on
+String motor_state_text = "OFF";
+int motor_state_temp = 0;
+String motor_state_temp_text = "OFF";
+int motor_dir = 0;//0 - forward, 1 - backward (FWD, BWD)
+String motor_dir_text = "FWD";
+int motor_dir_temp = 0;
+String motor_dir_temp_text = "FWD";
+
 int save=100; //режим работы меню. 100- режим выбора. 1,2,3 - выбранное значение
 float filT = 0; //фильтрованное значение датчика
 long previousMillis = 0;        // храним время последнего переключения светодиода
@@ -33,6 +65,9 @@ void setup()
   lcd.init();                      // initialize the lcd 
   // Print a message to the LCD.
   lcd.backlight();
+  lcd.createChar(0, motor_char_1);
+  lcd.createChar(1, motor_char_2);
+
   lcd.setCursor(5,0);
   lcd.print("Welcome to");
   lcd.setCursor(0,1);
@@ -47,14 +82,45 @@ void setup()
   lcd.print("Tc: ");//4,0 - set Temperature current
   lcd.setCursor(4,0);
   lcd.print(t_current);
-  lcd.setCursor(12,0);
-  lcd.print("Ts: ");//16,0 - set Temperature setting
-  lcd.setCursor(16,0);
+
+  lcd.setCursor(0,1);
+  lcd.print("Ts: ");//4,1 - set Temperature setting
+  lcd.setCursor(4,1);
   lcd.print(t_set);
-  lcd.setCursor(0,2);
-  lcd.print("Mot.Speed: 100");//11,2 - Motor speed
-  lcd.setCursor(11,2);
+  
+  lcd.setCursor(9,0);
+  lcd.write(0);
+  lcd.write(1);
+  lcd.setCursor(11,0);
+  lcd.print("spd: 100");//16,0 - Motor speed
+  lcd.setCursor(16,0);
   lcd.print(motor_speed);
+
+  if(motor_state==0){
+    motor_state_text="OFF";
+  }else{
+    motor_state_text=" ON";
+  }
+  lcd.setCursor(9,1);
+  lcd.write(0);
+  lcd.write(1);
+  lcd.setCursor(11,1);
+  lcd.print("act: OFF");//16,1 - Motor speed
+  lcd.setCursor(16,1);
+  lcd.print(motor_state_text);
+
+  if(motor_dir==0){
+    motor_dir_text="FWD";
+  }else{
+    motor_dir_text=" BWD";
+  }
+  lcd.setCursor(9,2);
+  lcd.write(0);
+  lcd.write(1);
+  lcd.setCursor(11,2);
+  lcd.print("dir: FWD");//16,2 - Motor speed
+  lcd.setCursor(16,2);
+  lcd.print(motor_dir_text);
 
   btn[0].setPins(INPUT_PULLUP, PD2);
   btn[1].setPins(INPUT_PULLUP, PD3);
@@ -96,9 +162,9 @@ void change_params(int save, int plus){
         t_set_temp=0;
       }
 
-      lcd.setCursor(16,0);
+      lcd.setCursor(4,1);
       lcd.print("   ");
-      lcd.setCursor(16,0);
+      lcd.setCursor(4,1);
       lcd.print(t_set_temp);
     }
     //change motor speed
@@ -109,17 +175,50 @@ void change_params(int save, int plus){
       if (plus==0){
         motor_speed_temp--;
       } 
-      if (motor_speed_temp>=255){
-        motor_speed_temp=255;
+      if (motor_speed_temp>=100){
+        motor_speed_temp=100;
       }
-      if (motor_speed_temp<=-255){
-        motor_speed_temp=-255;
+      if (motor_speed_temp<=0){
+        motor_speed_temp=0;
       }
 
-      lcd.setCursor(11,2);
+      lcd.setCursor(16,0);
       lcd.print("   ");
-      lcd.setCursor(11,2);
+      lcd.setCursor(16,0);
       lcd.print(motor_speed_temp);
+    }
+    //change motor state
+    if (save==3){
+
+      if (motor_state_temp>=1){
+        motor_state_temp=0;
+        motor_state_temp_text="OFF";
+      }
+      if (motor_state_temp<=0){
+        motor_state_temp=1;
+        motor_state_temp_text="ON";
+      }
+
+      lcd.setCursor(16,1);
+      lcd.print("   ");
+      lcd.setCursor(16,1);
+      lcd.print(motor_state_temp_text);
+    }
+    if (save==4){
+
+      if (motor_dir_temp>=1){
+        motor_dir_temp=0;
+        motor_dir_temp_text="FWD";
+      }
+      if (motor_dir_temp<=0){
+        motor_dir_temp=1;
+        motor_dir_temp_text="BWD";
+      }
+
+      lcd.setCursor(16,2);
+      lcd.print("   ");
+      lcd.setCursor(16,2);
+      lcd.print(motor_dir_temp_text);
     }
 }
 
@@ -148,10 +247,16 @@ void loop()
   //    lcd.setCursor(3, 0);
   //}
   if (cursor==1){
-      lcd.setCursor(15, 0);
+      lcd.setCursor(3, 1);
   }
   if (cursor==2){
-      lcd.setCursor(10, 2);
+      lcd.setCursor(15, 0);
+  }
+  if (cursor==3){
+      lcd.setCursor(15, 1);
+  }
+  if (cursor==4){
+      lcd.setCursor(15, 2);
   }
     //listen button held
   if (btn[0].held()) {
@@ -178,9 +283,9 @@ void loop()
       if(save==1){
         Serial.println("hold enter and save==1");
         t_set=t_set_temp;
-        lcd.setCursor(16,0);
+        lcd.setCursor(4,1);
         lcd.print("   ");
-        lcd.setCursor(16,0);
+        lcd.setCursor(4,1);
         lcd.print(t_set);
         lcd.cursor();
         lcd.blink();
@@ -189,10 +294,34 @@ void loop()
       if(save==2){
         Serial.println("hold enter and save==2");
         motor_speed=motor_speed_temp;
-        lcd.setCursor(11,2);
+        lcd.setCursor(16,0);
         lcd.print("   ");
-        lcd.setCursor(11,2);
+        lcd.setCursor(16,0);
         lcd.print(motor_speed);
+        lcd.cursor();
+        lcd.blink();
+        delay(3000);
+      }
+      if(save==3){
+        Serial.println("hold enter and save==3");
+        motor_state=motor_state_temp;
+        motor_state_text=motor_state_temp_text;
+        lcd.setCursor(16,1);
+        lcd.print("   ");
+        lcd.setCursor(16,1);
+        lcd.print(motor_state_text);
+        lcd.cursor();
+        lcd.blink();
+        delay(3000);
+      }
+      if(save==4){
+        Serial.println("hold enter and save==4");
+        motor_dir=motor_dir_temp;
+        motor_dir_text=motor_dir_temp_text;
+        lcd.setCursor(16,2);
+        lcd.print("   ");
+        lcd.setCursor(16,2);
+        lcd.print(motor_dir_temp_text);
         lcd.cursor();
         lcd.blink();
         delay(3000);
@@ -211,21 +340,33 @@ void loop()
       t_current_temp=t_current;
       t_set_temp=t_set;
       motor_speed_temp=motor_speed;
+      motor_state_temp=motor_state;
+      motor_state_temp_text=motor_state_text;
+      motor_dir_temp=motor_dir;
+      motor_dir_temp_text=motor_dir_text;
       lcd.setCursor(4,0);
       lcd.print("   ");
       lcd.setCursor(4,0);
       lcd.print(t_current);
-      lcd.setCursor(16,0);
+      lcd.setCursor(4,1);
       lcd.print("   ");
-      lcd.setCursor(16,0);
+      lcd.setCursor(4,1);
       lcd.print(t_set);
-      lcd.setCursor(11,2);
+      lcd.setCursor(16,0);
       lcd.print("   ");
-      lcd.setCursor(11,2);
+      lcd.setCursor(16,0);
       lcd.print(motor_speed);
+      lcd.setCursor(16,1);
+      lcd.print("   ");
+      lcd.setCursor(16,1);
+      lcd.print(motor_state_text);
+      lcd.setCursor(16,2);
+      lcd.print("   ");
+      lcd.setCursor(16,2);
+      lcd.print(motor_dir_text);
     }
     cursor++;
-    if (cursor>2){
+    if (cursor>4){
       cursor=1;
     }
   }  
