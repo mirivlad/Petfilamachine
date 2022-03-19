@@ -128,7 +128,7 @@ void setup()
   Serial.begin(115200);
 }
 
-void change_params(int save, int plus){
+void change_params(int save, int plus, int step_val){
     //change current temperature
     if (save==0){
       if (plus==1){
@@ -149,11 +149,12 @@ void change_params(int save, int plus){
     }
     //change needed temperature
     if (save==1){
+      
       if (plus==1){
-        t_set_temp++;
+        t_set_temp+=step_val;
       }
       if (plus==0){
-        t_set_temp--;
+        t_set_temp-=step_val;
       }
       if (t_set_temp>=300){
         t_set_temp=300;
@@ -170,10 +171,10 @@ void change_params(int save, int plus){
     //change motor speed
     if (save==2){
       if (plus==1){
-        motor_speed_temp++;
+        motor_speed_temp+=step_val;
       }
       if (plus==0){
-        motor_speed_temp--;
+        motor_speed_temp-=step_val;
       } 
       if (motor_speed_temp>=100){
         motor_speed_temp=100;
@@ -224,18 +225,21 @@ void change_params(int save, int plus){
 
 void loop()
 { 
+  //get temperature with filtration
+  filT += (therm.getTemp() - filT) * 0.1;
+  t_current_temp=filT;
+  
+  //therm.getTempAverage();
   unsigned long currentMillis = millis();
   
   //проверяем не прошел ли нужный интервал, если прошел то
   if(currentMillis - previousMillis > interval) {
     // сохраняем время последнего переключения
     previousMillis = currentMillis; 
-    change_params(0,100);  
+    change_params(0,100,0);  
   }
 
-  filT += (therm.getTemp() - filT) * 0.1;
-  t_current_temp=filT;
-  //therm.getTempAverage();
+  
   
   if (save==100){
     lcd.noBlink();
@@ -370,13 +374,34 @@ void loop()
       cursor=1;
     }
   }  
+  //TODO: how to know how much click done before held?
+  //int clicks1 = btn[1].hasClicks();
+  //int clicks2 = btn[2].hasClicks();
+  if (btn[1].step(2) && save!=100) {
+    Serial.println("press right and save!=100 and HOLD");
+    Serial.println(clicks1);
+    change_params(save,1,3);  
+  }
+  if (btn[2].step(2) && save!=100) {
+    Serial.println("press right and save!=100 and HOLD");
+    change_params(save,0,3);  
+  }
+  if (btn[1].step(4) && save!=100) {
+    Serial.println("press right and save!=100 and HOLD");
+    Serial.println(clicks1);
+    change_params(save,1,4);  
+  }
+  if (btn[2].step(4) && save!=100) {
+    Serial.println("press right and save!=100 and HOLD");
+    change_params(save,0,4);  
+  }
   if (btn[1].click() && save!=100) {
     Serial.println("press right and save!=100");
-    change_params(save,1);  
+    change_params(save,1,1);  
   } 
   if (btn[2].click() && save!=100) {
     Serial.println("press left and save!=100");
-    change_params(save,0);  
+    change_params(save,0,1);  
   } 
 
 }
