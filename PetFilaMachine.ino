@@ -1,6 +1,19 @@
 //enable 2040 LCD
-#include <LiquidCrystal_I2C.h>
-LiquidCrystal_I2C lcd(0x27,20,4);  // set the LCD address to 0x27 for a 16 chars and 2 line display
+//#include <LiquidCrystal_I2C.h>
+//LiquidCrystal_I2C lcd(0x27,20,4);  // set the LCD address to 0x27 for a 16 chars and 2 line display
+const int sda=SDA, scl=SCL;
+
+#include <SoftwareWire.h>	// make sure to not use beyond version 1.5.0
+// Check for "new" SoftwareWire that breaks things
+#if defined(TwoWire_h)
+#error incompatible version of SoftwareWire library (use version 1.5.0)
+#endif
+
+SoftwareWire Wire(sda,scl); // Create Wire object using desired Arduino pins
+
+#include <hd44780.h>
+#include <hd44780ioClass/hd44780_I2Cexp.h>
+hd44780_I2Cexp lcd; // declare lcd object and let it auto-configure everything.
 
 // Make custom characters:
 byte motor_char_1[] = {
@@ -61,10 +74,18 @@ long interval = 1000;           // интервал между включени�
 void setup()
 {
 
+int istatus;
 
-  lcd.init();                      // initialize the lcd 
+  istatus = lcd.begin(20,4);
+  if(istatus)
+  {
+	  // LCD initalization failed.
+	  // handle it anyway you want
+	  lcd.fatalError(istatus); // blinks error code on built in LED
+  }
+  //lcd.init();                      // initialize the lcd 
   // Print a message to the LCD.
-  lcd.backlight();
+  //lcd.backlight();
   lcd.createChar(0, motor_char_1);
   lcd.createChar(1, motor_char_2);
 
@@ -130,6 +151,12 @@ void setup()
 
 void change_params(int save, int plus, int step_val){
     //change current temperature
+    //save - value change params. 
+    // 0 - current temperature
+    // 1 - needed temperature
+    // 2 - motor speed
+    // 3 - motor start|stop
+    // 4 - motor direction
     if (save==0){
       if (plus==1){
         t_current_temp++;
@@ -285,7 +312,7 @@ void loop()
       //   delay(3000);
       // }
       if(save==1){
-        Serial.println("hold enter and save==1");
+        //Serial.println("hold enter and save==1");
         t_set=t_set_temp;
         lcd.setCursor(4,1);
         lcd.print("   ");
@@ -296,7 +323,7 @@ void loop()
         delay(3000);
       }
       if(save==2){
-        Serial.println("hold enter and save==2");
+        //Serial.println("hold enter and save==2");
         motor_speed=motor_speed_temp;
         lcd.setCursor(16,0);
         lcd.print("   ");
@@ -307,7 +334,7 @@ void loop()
         delay(3000);
       }
       if(save==3){
-        Serial.println("hold enter and save==3");
+        //Serial.println("hold enter and save==3");
         motor_state=motor_state_temp;
         motor_state_text=motor_state_temp_text;
         lcd.setCursor(16,1);
@@ -319,7 +346,7 @@ void loop()
         delay(3000);
       }
       if(save==4){
-        Serial.println("hold enter and save==4");
+        //Serial.println("hold enter and save==4");
         motor_dir=motor_dir_temp;
         motor_dir_text=motor_dir_temp_text;
         lcd.setCursor(16,2);
@@ -338,7 +365,7 @@ void loop()
   }
   //listen button click
   if (btn[0].click()) {
-    Serial.println("press enter");
+    //Serial.println("press enter");
     if(save!=100){
       save=100;
       t_current_temp=t_current;
@@ -378,29 +405,29 @@ void loop()
   //int clicks1 = btn[1].hasClicks();
   //int clicks2 = btn[2].hasClicks();
   if (btn[1].step(2) && save!=100) {
-    Serial.println("press right and save!=100 and HOLD");
-    Serial.println(clicks1);
+    //Serial.println("press right and save!=100 and HOLD");
+    //Serial.println(clicks1);
     change_params(save,1,3);  
   }
   if (btn[2].step(2) && save!=100) {
-    Serial.println("press right and save!=100 and HOLD");
+    //Serial.println("press right and save!=100 and HOLD");
     change_params(save,0,3);  
   }
   if (btn[1].step(4) && save!=100) {
-    Serial.println("press right and save!=100 and HOLD");
-    Serial.println(clicks1);
+    //Serial.println("press right and save!=100 and HOLD");
+    //Serial.println(clicks1);
     change_params(save,1,4);  
   }
   if (btn[2].step(4) && save!=100) {
-    Serial.println("press right and save!=100 and HOLD");
+    //Serial.println("press right and save!=100 and HOLD");
     change_params(save,0,4);  
   }
   if (btn[1].click() && save!=100) {
-    Serial.println("press right and save!=100");
+    //Serial.println("press right and save!=100");
     change_params(save,1,1);  
   } 
   if (btn[2].click() && save!=100) {
-    Serial.println("press left and save!=100");
+    //Serial.println("press left and save!=100");
     change_params(save,0,1);  
   } 
 
