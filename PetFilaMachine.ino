@@ -1,20 +1,20 @@
-//enable 2040 LCD
-//#include <LiquidCrystal_I2C.h>
-//LiquidCrystal_I2C lcd(0x27,20,4);  // set the LCD address to 0x27 for a 16 chars and 2 line display
-const int sda=SDA, scl=SCL;
-
-#include <SoftwareWire.h>	// make sure to not use beyond version 1.5.0
-// Check for "new" SoftwareWire that breaks things
-#if defined(TwoWire_h)
-#error incompatible version of SoftwareWire library (use version 1.5.0)
-#endif
-
-SoftwareWire Wire(sda,scl); // Create Wire object using desired Arduino pins
-
+#include <Wire.h>
+//// Not work with Gyver Lib - EncButton
+//const int sda=D1, scl=D2;
+// #include <SoftwareWire.h>	//make sure to not use beyond version 1.5.0
+// // Check for "new" SoftwareWire that breaks things
+// #if defined(TwoWire_h)
+//  #error incompatible version of SoftwareWire library (use version 1.5.0)
+// #endif
+// SoftwareWire Wire(D1,D2); // Create Wire object using desired Arduino pins
+//////
 #include <hd44780.h>
 #include <hd44780ioClass/hd44780_I2Cexp.h>
 hd44780_I2Cexp lcd; // declare lcd object and let it auto-configure everything.
 
+#define L_BTN D0    // left button
+#define R_BTN D3    // right button
+#define E_BTN D4    // enter button
 // Make custom characters:
 byte motor_char_1[] = {
   B00111,
@@ -71,16 +71,16 @@ int save=100; //режим работы меню. 100- режим выбора. 
 float filT = 0; //фильтрованное значение датчика
 long previousMillis = 0;        // храним время последнего переключения светодиода
 long interval = 1000;           // интервал между включение/выключением светодиода (1 секунда)
+
 void setup()
 {
-
-int istatus;
+  Serial.begin(115200);
+  int istatus;
 
   istatus = lcd.begin(20,4);
   if(istatus)
   {
-	  // LCD initalization failed.
-	  // handle it anyway you want
+	  Serial.println("-----Err init screen\n");
 	  lcd.fatalError(istatus); // blinks error code on built in LED
   }
   //lcd.init();                      // initialize the lcd 
@@ -97,7 +97,8 @@ int istatus;
   lcd.print("Firmware ver 0.1");
   lcd.setCursor(0,3);
   lcd.print("Powered By Mirivlad");
-  delay(3000);
+  Serial.println("+++++Welcome screen ok");
+  delay(1000);
   lcd.clear();
   lcd.setCursor(0,0);
   lcd.print("Tc: ");//4,0 - set Temperature current
@@ -143,10 +144,11 @@ int istatus;
   lcd.setCursor(16,2);
   lcd.print(motor_dir_text);
 
-  btn[0].setPins(INPUT_PULLUP, PD2);
-  btn[1].setPins(INPUT_PULLUP, PD3);
-  btn[2].setPins(INPUT_PULLUP, PD4);
-  Serial.begin(115200);
+  btn[0].setPins(INPUT_PULLUP, L_BTN);
+  btn[1].setPins(INPUT_PULLUP, R_BTN);
+  btn[2].setPins(INPUT_PULLUP, E_BTN);
+  
+  Serial.println("+++++Menu screen ok");
 }
 
 void change_params(int save, int plus, int step_val){
@@ -173,6 +175,7 @@ void change_params(int save, int plus, int step_val){
       lcd.print("   ");
       lcd.setCursor(4,0);
       lcd.print(t_current_temp);
+      Serial.println("+++++Set current temp ok");
     }
     //change needed temperature
     if (save==1){
@@ -194,6 +197,7 @@ void change_params(int save, int plus, int step_val){
       lcd.print("   ");
       lcd.setCursor(4,1);
       lcd.print(t_set_temp);
+      Serial.println("+++++Set needing temp ok");
     }
     //change motor speed
     if (save==2){
@@ -214,6 +218,7 @@ void change_params(int save, int plus, int step_val){
       lcd.print("   ");
       lcd.setCursor(16,0);
       lcd.print(motor_speed_temp);
+      Serial.println("+++++Set motor speed ok");
     }
     //change motor state
     if (save==3){
@@ -231,6 +236,7 @@ void change_params(int save, int plus, int step_val){
       lcd.print("   ");
       lcd.setCursor(16,1);
       lcd.print(motor_state_temp_text);
+      Serial.println("+++++Set motor state ok");
     }
     if (save==4){
 
@@ -247,15 +253,17 @@ void change_params(int save, int plus, int step_val){
       lcd.print("   ");
       lcd.setCursor(16,2);
       lcd.print(motor_dir_temp_text);
+      Serial.println("+++++Set motor direction ok");
     }
 }
 
 void loop()
 { 
   //get temperature with filtration
-  filT += (therm.getTemp() - filT) * 0.1;
+  //Serial.println("=====Try get temp");
+  //filT += (therm.getTemp() - filT) * 0.1;
   t_current_temp=filT;
-  
+  //Serial.println("=====Get temp");
   //therm.getTempAverage();
   unsigned long currentMillis = millis();
   
@@ -263,7 +271,10 @@ void loop()
   if(currentMillis - previousMillis > interval) {
     // сохраняем время последнего переключения
     previousMillis = currentMillis; 
+
     change_params(0,100,0);  
+    Serial.println("=====Send current temp");
+    
   }
 
   
