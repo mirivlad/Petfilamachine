@@ -12,9 +12,9 @@
 #include <hd44780ioClass/hd44780_I2Cexp.h>
 hd44780_I2Cexp lcd; // declare lcd object and let it auto-configure everything.
 
-#define L_BTN D0    // left button
+#define L_BTN D4    // left button
 #define R_BTN D3    // right button
-#define E_BTN D4    // enter button
+#define E_BTN D5    // enter button
 // Make custom characters:
 byte motor_char_1[] = {
   B00111,
