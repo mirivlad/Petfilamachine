@@ -261,7 +261,7 @@ void loop()
 { 
   //get temperature with filtration
   //Serial.println("=====Try get temp");
-  //filT += (therm.getTemp() - filT) * 0.1;
+  filT += (therm.getTemp() - filT) * 0.1;
   t_current_temp=filT;
   //Serial.println("=====Get temp");
   //therm.getTempAverage();
@@ -274,7 +274,6 @@ void loop()
 
     change_params(0,100,0);  
     Serial.println("=====Send current temp");
-    
   }
 
   
