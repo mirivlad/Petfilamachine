@@ -42,7 +42,7 @@ byte motor_char_2[] = {
 // термистор на пине А0
 // сопротивление резистора 10к
 // тепловой коэффициент 3950
-GyverNTC therm(0, 100000, 3950);
+GyverNTC therm(A0, 100000, 3950, 25, 8890);
 
 //enable button lib and define buttons array
 #define BTN_AMOUNT 5
@@ -70,7 +70,7 @@ String motor_dir_temp_text = "FWD";
 int save=100; //режим работы меню. 100- режим выбора. 1,2,3 - выбранное значение
 float filT = 0; //фильтрованное значение датчика
 long previousMillis = 0;        // храним время последнего переключения светодиода
-long interval = 1000;           // интервал между включение/выключением светодиода (1 секунда)
+long interval = 600;           // интервал между включение/выключением светодиода (1 секунда)
 
 void setup()
 {
@@ -160,12 +160,7 @@ void change_params(int save, int plus, int step_val){
     // 3 - motor start|stop
     // 4 - motor direction
     if (save==0){
-      if (plus==1){
-        t_current_temp++;
-      }
-      if (plus==0){
-        t_current_temp--;
-      }      
+    
       if (t_current>=300 || t_current<=0){
         //stop heating
       }
@@ -175,7 +170,7 @@ void change_params(int save, int plus, int step_val){
       lcd.print("   ");
       lcd.setCursor(4,0);
       lcd.print(t_current_temp);
-      Serial.println("+++++Set current temp ok");
+      Serial.println(t_current_temp);
     }
     //change needed temperature
     if (save==1){
@@ -261,8 +256,8 @@ void loop()
 { 
   //get temperature with filtration
   //Serial.println("=====Try get temp");
-  filT += (therm.getTemp() - filT) * 0.1;
-  t_current_temp=filT;
+  //filT += (therm.getTemp() - filT) * 0.1;
+  t_current_temp=therm.getTemp();
   //Serial.println("=====Get temp");
   //therm.getTempAverage();
   unsigned long currentMillis = millis();
@@ -273,7 +268,7 @@ void loop()
     previousMillis = currentMillis; 
 
     change_params(0,100,0);  
-    Serial.println("=====Send current temp");
+    //Serial.println(analogRead(A0));
   }
 
   
