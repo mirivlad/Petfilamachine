@@ -15,6 +15,14 @@ hd44780_I2Cexp lcd; // declare lcd object and let it auto-configure everything.
 #define L_BTN D4    // left button
 #define R_BTN D3    // right button
 #define E_BTN D5    // enter button
+
+#define T_PIN A0    // thermistor pin
+
+#define STEPS 400    // thermistor pin
+#define STEP_PIN D7    // thermistor pin
+#define DIR_PIN D8    // thermistor pin
+#define EN_PIN D6    // thermistor pin
+
 // Make custom characters:
 byte motor_char_1[] = {
   B00111,
@@ -42,7 +50,7 @@ byte motor_char_2[] = {
 // термистор на пине А0
 // сопротивление резистора 10к
 // тепловой коэффициент 3950
-GyverNTC therm(A0, 100000, 3950, 25, 8890);
+GyverNTC therm(T_PIN, 100000, 3950, 25, 8890);
 
 //enable button lib and define buttons array
 #define BTN_AMOUNT 5
@@ -50,7 +58,12 @@ GyverNTC therm(A0, 100000, 3950, 25, 8890);
 #include <EncButton2.h>
 EncButton2<EB_BTN> btn[BTN_AMOUNT];
 
+//#define GS_NO_ACCEL 
+#include <GyverStepper2.h>
+GStepper2<STEPPER2WIRE> stepper(STEPS, STEP_PIN, DIR_PIN, EN_PIN);
+
 //define vars
+int max_speed = STEPS; //3600 degrees in 10 seconds = 10 rotate/seconds
 int cursor=1; //позиция курсора
 int t_current=230;
 int t_current_temp=230;
@@ -72,11 +85,12 @@ float filT = 0; //фильтрованное значение датчика
 long previousMillis = 0;        // храним время последнего переключения светодиода
 long interval = 600;           // интервал между включение/выключением светодиода (1 секунда)
 
-void setup()
-{
+void setup(){
   Serial.begin(115200);
-  int istatus;
 
+  stepper.setSpeed(0);
+
+  int istatus;
   istatus = lcd.begin(20,4);
   if(istatus)
   {
@@ -151,114 +165,11 @@ void setup()
   Serial.println("+++++Menu screen ok");
 }
 
-void change_params(int save, int plus, int step_val){
-    //change current temperature
-    //save - value change params. 
-    // 0 - current temperature
-    // 1 - needed temperature
-    // 2 - motor speed
-    // 3 - motor start|stop
-    // 4 - motor direction
-    if (save==0){
-    
-      if (t_current>=300 || t_current<=0){
-        //stop heating
-      }
-      lcd.noBlink();
-      lcd.noCursor();
-      lcd.setCursor(4,0);
-      lcd.print("   ");
-      lcd.setCursor(4,0);
-      lcd.print(t_current_temp);
-      Serial.println(t_current_temp);
-    }
-    //change needed temperature
-    if (save==1){
-      
-      if (plus==1){
-        t_set_temp+=step_val;
-      }
-      if (plus==0){
-        t_set_temp-=step_val;
-      }
-      if (t_set_temp>=300){
-        t_set_temp=300;
-      }
-      if (t_set_temp<=0){
-        t_set_temp=0;
-      }
-
-      lcd.setCursor(4,1);
-      lcd.print("   ");
-      lcd.setCursor(4,1);
-      lcd.print(t_set_temp);
-      Serial.println("+++++Set needing temp ok");
-    }
-    //change motor speed
-    if (save==2){
-      if (plus==1){
-        motor_speed_temp+=step_val;
-      }
-      if (plus==0){
-        motor_speed_temp-=step_val;
-      } 
-      if (motor_speed_temp>=100){
-        motor_speed_temp=100;
-      }
-      if (motor_speed_temp<=0){
-        motor_speed_temp=0;
-      }
-
-      lcd.setCursor(16,0);
-      lcd.print("   ");
-      lcd.setCursor(16,0);
-      lcd.print(motor_speed_temp);
-      Serial.println("+++++Set motor speed ok");
-    }
-    //change motor state
-    if (save==3){
-
-      if (motor_state_temp>=1){
-        motor_state_temp=0;
-        motor_state_temp_text="OFF";
-      }
-      if (motor_state_temp<=0){
-        motor_state_temp=1;
-        motor_state_temp_text="ON";
-      }
-
-      lcd.setCursor(16,1);
-      lcd.print("   ");
-      lcd.setCursor(16,1);
-      lcd.print(motor_state_temp_text);
-      Serial.println("+++++Set motor state ok");
-    }
-    if (save==4){
-
-      if (motor_dir_temp>=1){
-        motor_dir_temp=0;
-        motor_dir_temp_text="FWD";
-      }
-      if (motor_dir_temp<=0){
-        motor_dir_temp=1;
-        motor_dir_temp_text="BWD";
-      }
-
-      lcd.setCursor(16,2);
-      lcd.print("   ");
-      lcd.setCursor(16,2);
-      lcd.print(motor_dir_temp_text);
-      Serial.println("+++++Set motor direction ok");
-    }
-}
-
 void loop()
 { 
   //get temperature with filtration
-  //Serial.println("=====Try get temp");
   //filT += (therm.getTemp() - filT) * 0.1;
   t_current_temp=therm.getTemp();
-  //Serial.println("=====Get temp");
   //therm.getTempAverage();
   unsigned long currentMillis = millis();
   
@@ -266,11 +177,22 @@ void loop()
   if(currentMillis - previousMillis > interval) {
     // сохраняем время последнего переключения
     previousMillis = currentMillis; 
-
     change_params(0,100,0);  
-    //Serial.println(analogRead(A0));
   }
+  //управляем мотором
+  stepper.tick();
+  //считаем текущую скорость
+  if (motor_state==1){
 
+    int16_t  cur_speed_deg=(motor_speed*STEPS)/10;
+    if (motor_dir==0){
+      stepper.setSpeed(cur_speed_deg);
+    }else{
+      stepper.setSpeed(-cur_speed_deg);
+    }
+  }else{
+    stepper.disable();
+  }
   
   
   if (save==100){
@@ -305,17 +227,7 @@ void loop()
       lcd.cursor();
     }else{
       //enter save mode
-      // if(save==0){
-      //   Serial.println("hold enter and save==0");
-      //   t_current=t_current_temp;
-      //   lcd.setCursor(4,0);
-      //   lcd.print("   ");
-      //   lcd.setCursor(4,0);
-      //   lcd.print(t_current);
-      //   lcd.cursor();
-      //   lcd.blink();
-      //   delay(3000);
-      // }
+
       if(save==1){
         //Serial.println("hold enter and save==1");
         t_set=t_set_temp;
@@ -342,6 +254,11 @@ void loop()
         //Serial.println("hold enter and save==3");
         motor_state=motor_state_temp;
         motor_state_text=motor_state_temp_text;
+        if (motor_state==0){
+          stepper.disable();
+        }else{
+          stepper.enable();
+        }
         lcd.setCursor(16,1);
         lcd.print("   ");
         lcd.setCursor(16,1);
@@ -354,6 +271,8 @@ void loop()
         //Serial.println("hold enter and save==4");
         motor_dir=motor_dir_temp;
         motor_dir_text=motor_dir_temp_text;
+        //тормозим перед сменой направления
+        stepper.brake();
         lcd.setCursor(16,2);
         lcd.print("   ");
         lcd.setCursor(16,2);
@@ -436,4 +355,105 @@ void loop()
     change_params(save,0,1);  
   } 
 
+}
+
+void change_params(int save, int plus, int step_val){
+    //change current temperature
+    //save - value change params. 
+    // 0 - current temperature
+    // 1 - needed temperature
+    // 2 - motor speed
+    // 3 - motor start|stop
+    // 4 - motor direction
+    if (save==0){
+    
+      if (t_current>=300 || t_current<=0){
+        //stop heating
+      }
+      lcd.noBlink();
+      lcd.noCursor();
+      lcd.setCursor(4,0);
+      lcd.print("   ");
+      lcd.setCursor(4,0);
+      lcd.print(t_current_temp);
+      Serial.println(t_current_temp);
+    }
+    //change needed temperature
+    if (save==1){
+      
+      if (plus==1){
+        t_set_temp+=step_val;
+      }
+      if (plus==0){
+        t_set_temp-=step_val;
+      }
+      if (t_set_temp>=300){
+        t_set_temp=300;
+      }
+      if (t_set_temp<=0){
+        t_set_temp=0;
+      }
+
+      lcd.setCursor(4,1);
+      lcd.print("   ");
+      lcd.setCursor(4,1);
+      lcd.print(t_set_temp);
+      Serial.println("+++++Set needing temp ok");
+    }
+    //change motor speed
+    if (save==2){
+      if (plus==1){
+        motor_speed_temp+=step_val;
+      }
+      if (plus==0){
+        motor_speed_temp-=step_val;
+      } 
+      if (motor_speed_temp>=10000){
+        motor_speed_temp=10000;
+      }
+      if (motor_speed_temp<=0){
+        motor_speed_temp=0;
+      }
+
+      lcd.setCursor(16,0);
+      lcd.print("   ");
+      lcd.setCursor(16,0);
+      lcd.print(motor_speed_temp);
+      Serial.println("+++++Set motor speed ok");
+    }
+    //change motor state
+    if (save==3){
+
+      if (motor_state_temp>=1){
+        motor_state_temp=0;
+        motor_state_temp_text="OFF";
+      }
+      if (motor_state_temp<=0){
+        motor_state_temp=1;
+        motor_state_temp_text="ON";
+      }
+
+      lcd.setCursor(16,1);
+      lcd.print("   ");
+      lcd.setCursor(16,1);
+      lcd.print(motor_state_temp_text);
+      Serial.println("+++++Set motor state ok");
+    }
+    if (save==4){
+
+      if (motor_dir_temp>=1){
+        motor_dir_temp=0;
+        motor_dir_temp_text="FWD";
+      }
+      if (motor_dir_temp<=0){
+        motor_dir_temp=1;
+        motor_dir_temp_text="BWD";
+      }
+
+      lcd.setCursor(16,2);
+      lcd.print("   ");
+      lcd.setCursor(16,2);
+      lcd.print(motor_dir_temp_text);
+      Serial.println("+++++Set motor direction ok");
+    }
 }
