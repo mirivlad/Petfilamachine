@@ -58,7 +58,8 @@ GyverNTC therm(T_PIN, 100000, 3950, 25, 8890);
 #include <EncButton2.h>
 EncButton2<EB_BTN> btn[BTN_AMOUNT];
 
-//#define GS_NO_ACCEL 
+//#define GS_NO_ACCEL                         
+// отключить модуль движения с ускорением (уменьшить вес кода)
 #include <GyverStepper2.h>
 GStepper2<STEPPER2WIRE> stepper(STEPS, STEP_PIN, DIR_PIN, EN_PIN);
 
@@ -87,8 +88,7 @@ long interval = 600;           // интервал между включение
 
 void setup(){
   Serial.begin(115200);
-
-  stepper.setSpeed(0);
+  //stepper.setSpeed(0);
 
   int istatus;
   istatus = lcd.begin(20,4);
@@ -167,6 +167,10 @@ void setup(){
 
 void loop()
 { 
+    
+  //управляем мотором
+  stepper.tick();
+
   //get temperature with filtration
   //filT += (therm.getTemp() - filT) * 0.1;
   t_current_temp=therm.getTemp();
@@ -178,32 +182,27 @@ void loop()
     // сохраняем время последнего переключения
     previousMillis = currentMillis; 
     change_params(0,100,0);  
-  }
-  //управляем мотором
-  stepper.tick();
-  //считаем текущую скорость
-  if (motor_state==1){
+  } 
 
-    int16_t  cur_speed_deg=(motor_speed*STEPS)/10;
-    if (motor_dir==0){
-      stepper.setSpeed(cur_speed_deg);
+ 
+  if (motor_state == 1){
+    if (motor_dir == 0){
+      stepper.setSpeed(motor_speed);
     }else{
-      stepper.setSpeed(-cur_speed_deg);
+      stepper.setSpeed(-motor_speed);
     }
   }else{
     stepper.disable();
   }
   
-  
+
+
   if (save==100){
     lcd.noBlink();
     lcd.cursor();
   }
   for (int i = 0; i < BTN_AMOUNT; i++) btn[i].tick();
-  //moving cursor
-  //if (cursor==0){
-  //    lcd.setCursor(3, 0);
-  //}
+
   if (cursor==1){
       lcd.setCursor(3, 1);
   }
@@ -242,6 +241,14 @@ void loop()
       if(save==2){
         //Serial.println("hold enter and save==2");
         motor_speed=motor_speed_temp;
+        if (motor_state==1){
+          if (motor_dir==0){
+            stepper.setSpeed(motor_speed);
+          }else{
+            stepper.setSpeed(-motor_speed);
+          }
+        }
+        
         lcd.setCursor(16,0);
         lcd.print("   ");
         lcd.setCursor(16,0);
@@ -255,6 +262,7 @@ void loop()
         motor_state=motor_state_temp;
         motor_state_text=motor_state_temp_text;
         if (motor_state==0){
+          stepper.stop();
           stepper.disable();
         }else{
           stepper.enable();
@@ -276,7 +284,7 @@ void loop()
         lcd.setCursor(16,2);
         lcd.print("   ");
         lcd.setCursor(16,2);
-        lcd.print(motor_dir_temp_text);
+        lcd.print(motor_dir_text);
         lcd.cursor();
         lcd.blink();
         delay(3000);
@@ -414,7 +422,13 @@ void change_params(int save, int plus, int step_val){
       if (motor_speed_temp<=0){
         motor_speed_temp=0;
       }
-
+      if (motor_state==1){
+        if (motor_dir==0){
+          stepper.setSpeed(motor_speed_temp);
+        }else{
+          stepper.setSpeed(-motor_speed_temp);
+        }
+      }
       lcd.setCursor(16,0);
       lcd.print("   ");
       lcd.setCursor(16,0);
@@ -427,10 +441,15 @@ void change_params(int save, int plus, int step_val){
       if (motor_state_temp>=1){
         motor_state_temp=0;
         motor_state_temp_text="OFF";
-      }
-      if (motor_state_temp<=0){
+        motor_state=0;
+        motor_state_text="OFF";
+        stepper.disable();        
+      }else{
         motor_state_temp=1;
         motor_state_temp_text="ON";
+        motor_state=1;
+        motor_state_text="ON";
+        stepper.enable();
       }
 
       lcd.setCursor(16,1);
@@ -444,10 +463,13 @@ void change_params(int save, int plus, int step_val){
       if (motor_dir_temp>=1){
         motor_dir_temp=0;
         motor_dir_temp_text="FWD";
-      }
-      if (motor_dir_temp<=0){
+        motor_dir=0;
+        motor_dir_text="FWD";
+      }else{
         motor_dir_temp=1;
         motor_dir_temp_text="BWD";
+        motor_dir=1;
+        motor_dir_text="BWD";
       }
 
       lcd.setCursor(16,2);
