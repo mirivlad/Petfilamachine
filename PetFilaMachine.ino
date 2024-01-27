@@ -384,7 +384,7 @@ void loop()
     // (после вызова можно получать это значение как regulator.output)
     // обновление происходит по встроенному таймеру на millis()
     regulator.getResult();
-    analogWrite(D0, regulator.output);  // отправляем на мосфет
+    analogWrite(D0, regulator.getResultTimer());  // отправляем на мосфет
   }
   if (motor_state == 1){
     if (motor_dir == 0){
