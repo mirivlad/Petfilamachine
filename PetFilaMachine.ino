@@ -2,33 +2,35 @@
   #error This code is designed to run on ESP8266 and ESP8266-based boards! Please check your Tools->Board setting.
 #endif
 #include <Wire.h>
-//// Not work with Gyver Lib - EncButton
-//const int sda=D1, scl=D2;
-// #include <SoftwareWire.h>	//make sure to not use beyond version 1.5.0
-// // Check for "new" SoftwareWire that breaks things
-// #if defined(TwoWire_h)
-//  #error incompatible version of SoftwareWire library (use version 1.5.0)
-// #endif
-// SoftwareWire Wire(D1,D2); // Create Wire object using desired Arduino pins
-//////
 #include <hd44780.h>
 #include <hd44780ioClass/hd44780_I2Cexp.h>
-hd44780_I2Cexp lcd; // declare lcd object and let it auto-configure everything.
+hd44780_I2Cexp lcd;
 
+#define L_BTN D4
+#define R_BTN D3
+#define E_BTN D5
 
-#define L_BTN D4    // left button
-#define R_BTN D3    // right button
-#define E_BTN D5    // enter button
+#define T_PIN A0
 
-#define T_PIN A0    // thermistor pin
-
-#define STEPS 400    // thermistor pin
-#define STEP_PIN D7    // thermistor pin
-#define DIR_PIN D8    // thermistor pin
-#define EN_PIN D6    // thermistor pin
+#define STEPS 400
+#define STEP_PIN D7
+#define DIR_PIN D8
+#define EN_PIN D6
 
 #define MOS_PIN D0
-// Make custom characters:
+
+#include <EEPROM.h>
+
+// EEPROM addresses
+#define EEPROM_ADDR_TEMP_TARGET 0
+#define EEPROM_ADDR_MOTOR_SPEED 4
+#define EEPROM_ADDR_MOTOR_DIR 8
+#define EEPROM_ADDR_PID_P 9
+#define EEPROM_ADDR_PID_I 13
+#define EEPROM_ADDR_PID_D 17
+#define EEPROM_MAGIC 0xAB
+#define EEPROM_MAGIC_ADDR 21
+
 byte motor_char_1[] = {
   B00111,
   B01000,
@@ -50,530 +52,703 @@ byte motor_char_2[] = {
   B11100
 };
 
-//enable NTC thermistor
 #include <GyverNTC.h>
-// термистор на пине А0
-// сопротивление резистора 10к
-// тепловой коэффициент 3950
 GyverNTC therm(T_PIN, 100000, 3950, 25, 8890);
 
-//enable button lib and define buttons array
-#define BTN_AMOUNT 5
-#define EB_HOLD 1000
+#define BTN_AMOUNT 3
 #include <EncButton2.h>
 EncButton2<EB_BTN> btn[BTN_AMOUNT];
 
-//enable stepper
-//#define GS_NO_ACCEL                         
-// отключить модуль движения с ускорением (уменьшить вес кода)
 #include <GyverStepper2.h>
 GStepper2<STEPPER2WIRE> stepper(STEPS, STEP_PIN, DIR_PIN, EN_PIN);
 
-// These define's must be placed at the beginning before #include "ESP8266TimerInterrupt.h"
-// _TIMERINTERRUPT_LOGLEVEL_ from 0 to 4
-// Don't define _TIMERINTERRUPT_LOGLEVEL_ > 0. Only for special ISR debugging only. Can hang the system.
 #define TIMER_INTERRUPT_DEBUG         0
 #define _TIMERINTERRUPT_LOGLEVEL_     0
-// Select a Timer Clock
-#define USING_TIM_DIV1                false           // for shortest and most accurate timer
-#define USING_TIM_DIV16               false           // for medium time and medium accurate timer
-#define USING_TIM_DIV256              true            // for longest timer but least accurate. Default
+#define USING_TIM_DIV1                false
+#define USING_TIM_DIV16               false
+#define USING_TIM_DIV256              true
 #include "ESP8266TimerInterrupt.h"
-volatile uint32_t lastMillis = 0;
-#define TIMER_INTERVAL_MS   1000
-// Init ESP8266 timer 1
 ESP8266Timer ITimer;
+
 #define P 16.67
 #define I 0.75
 #define D 91.91
 #define DT 10
-//PID regulator
 #include "GyverPID.h"
-GyverPID regulator(P, I, D, DT);  // коэф. П, коэф. И, коэф. Д, период дискретизации dt (мс)
-//Autotune PID
+GyverPID regulator(P, I, D, DT);
+
 #include "PIDtuner.h"
 PIDtuner tuner;
 
-//define vars
-int max_speed = STEPS;
-int cursor=1; //позиция курсора
-int t_current=25;
-// int t_current_temp=230;
-int t_set=25;
-// int t_set_temp=230;
-int motor_speed=100;
-// int motor_speed_temp=100;
-int motor_state = 0;//0 - off, 1 - on
-String motor_state_text = "OFF";
-// int motor_state_temp = 0;
-// String motor_state_temp_text = "OFF";
-int motor_dir = 0;//0 - forward, 1 - backward (FWD, BWD)
-String motor_dir_text = "FWD";
-// int motor_dir_temp = 0;
-// String motor_dir_temp_text = "FWD";
+// ============================================================================
+// CONSTANTS AND ENUMS
+// ============================================================================
 
-int save=100; //режим работы меню. 100- режим выбора. 1,2,3 - выбранное значение
+enum MenuState {
+  STATE_VIEW,
+  STATE_EDIT_TEMP,
+  STATE_EDIT_SPEED,
+  STATE_EDIT_MOTOR_STATE,
+  STATE_EDIT_MOTOR_DIR,
+  STATE_AUTOTUNE,
+  STATE_EDIT_HEATER
+};
 
-long previousMillis = 0;        // храним время последнего переключения светодиода
-long interval = 600;           // интервал между включение/выключением светодиода (1 секунда)
-int autotune=0;
-//===========Stepping in timer interrupts==================================
+enum CursorPosition {
+  CURSOR_TARGET_TEMP = 1,
+  CURSOR_MOTOR_SPEED = 2,
+  CURSOR_MOTOR_STATE = 3,
+  CURSOR_MOTOR_DIR = 4,
+  CURSOR_AUTOTUNE = 5,
+  CURSOR_HEATER_STATE = 6
+};
+
+const uint8_t PIN_MOSFET = D0;
+
+const int TEMP_MIN = 0;
+const int TEMP_MAX = 300;
+const int SPEED_MIN = 0;
+const int SPEED_MAX = 10000;
+
+const unsigned long UPDATE_TEMP_INTERVAL = 1000;
+const unsigned long CONFIRM_DELAY = 500;
+
+// ============================================================================
+// GLOBAL VARIABLES
+// ============================================================================
+
+MenuState menuState = STATE_VIEW;
+CursorPosition cursorPos = CURSOR_TARGET_TEMP;
+bool autotuneActive = false;
+
+int tempCurrent = 25;
+int tempTarget = 25;
+
+int motorSpeed = 100;
+bool motorRunning = false;
+bool motorDirection = false;
+
+bool heaterEnabled = false;
+
+unsigned long lastTempUpdate = 0;
+unsigned long lastConfirmTime = 0;
+bool pendingConfirmation = false;
+
+// ============================================================================
+// TIMER INTERRUPT HANDLER
+// ============================================================================
+
 void IRAM_ATTR TimerHandler()
 {
-  if (motor_state==1)
-  {
+  if (motorRunning) {
     stepper.tick();
   }
 }
 
+// ============================================================================
+// DISPLAY FUNCTIONS
+// ============================================================================
 
-//=====================================================================
-void setup(){
-  Serial.begin(115200);
-
-  // Start interrupts timer. Interval in microsecs
-  if (ITimer.attachInterruptInterval(100, TimerHandler))
-  {
-    lastMillis = millis();
-    Serial.print(F("Starting  ITimer OK, millis() = ")); Serial.println(lastMillis);
+void displayInit() {
+  int status = lcd.begin(20, 4);
+  if (status) {
+    Serial.println("-----Err init screen\n");
+    lcd.fatalError(status);
   }
-  else{
-    Serial.println(F("Can't set ITimer correctly. Select another freq. or interval"));
-  }
-  //initial screen
-  init_screen();
-  //init buttons
-  btn[0].setPins(INPUT_PULLUP, L_BTN);
-  btn[1].setPins(INPUT_PULLUP, R_BTN);
-  btn[2].setPins(INPUT_PULLUP, E_BTN);
-
-
-  regulator.setDirection(NORMAL); // направление регулирования (NORMAL/REVERSE). ПО УМОЛЧАНИЮ СТОИТ NORMAL
-  regulator.setLimits(0, 255);    // пределы (ставим для 8 битного ШИМ). ПО УМОЛЧАНИЮ СТОЯТ 0 И 255
-  regulator.setpoint = t_set;        // сообщаем регулятору температуру, которую он должен поддерживать
-}
-
-void init_screen(){
-
-  int istatus;
-  istatus = lcd.begin(20,4);
-  if(istatus)
-  {
-	  Serial.println("-----Err init screen\n");
-	  lcd.fatalError(istatus); // blinks error code on built in LED
-  }
-  //lcd.init();                      // initialize the lcd 
-  // Print a message to the LCD.
-  //lcd.backlight();
+  
   lcd.createChar(0, motor_char_1);
   lcd.createChar(1, motor_char_2);
+}
 
-  lcd.setCursor(5,0);
-  lcd.print("Welcome to");
-  lcd.setCursor(0,1);
-  lcd.print("PetFilament Machine");
-  lcd.setCursor(2,2);
-  lcd.print("Firmware ver 0.1");
-  lcd.setCursor(0,3);
-  lcd.print("Powered By Mirivlad");
-  Serial.println("+++++Welcome screen ok");
-  delay(1000);
+void displayWelcome() {
   lcd.clear();
-  lcd.setCursor(0,0);
-  lcd.print("Tc: ");//4,0 - set Temperature current
-  lcd.setCursor(4,0);
-  lcd.print(t_current);
-
-  lcd.setCursor(0,1);
-  lcd.print("Ts: ");//4,1 - set Temperature setting
-  lcd.setCursor(4,1);
-  lcd.print(t_set);
-  
-  lcd.setCursor(0,2);
-  lcd.print(" PID TUNE");//0,2 - set Temperature setting
-  // lcd.setCursor(4,1);
-  // lcd.print(t_set);
-
-  lcd.setCursor(9,0);
-  lcd.write(0);
-  lcd.write(1);
-  lcd.setCursor(11,0);
-  lcd.print("spd: 100");//16,0 - Motor speed
-  lcd.setCursor(16,0);
-  lcd.print(motor_speed);
-
-  if(motor_state==0){
-    motor_state_text="OFF";
-  }else{
-    motor_state_text=" ON";
-  }
-  lcd.setCursor(9,1);
-  lcd.write(0);
-  lcd.write(1);
-  lcd.setCursor(11,1);
-  lcd.print("act: OFF");//16,1 - Motor speed
-  lcd.setCursor(16,1);
-  lcd.print(motor_state_text);
-
-  if(motor_dir==0){
-    motor_dir_text="FWD";
-  }else{
-    motor_dir_text=" BWD";
-  }
-  lcd.setCursor(9,2);
-  lcd.write(0);
-  lcd.write(1);
-  lcd.setCursor(11,2);
-  lcd.print("dir: FWD");//16,2 - Motor speed
-  lcd.setCursor(16,2);
-  lcd.print(motor_dir_text);
+  lcd.setCursor(5, 0);
+  lcd.print("Welcome to");
+  lcd.setCursor(0, 1);
+  lcd.print("PetFilament Machine");
+  lcd.setCursor(2, 2);
+  lcd.print("Firmware ver 0.2");
+  lcd.setCursor(0, 3);
+  lcd.print("Powered By Mirivlad");
+  delay(1000);
 }
-void change_params(int save, int plus, int step_val){
-    //change current temperature
-    //save - value change params. 
-    // 0 - current temperature
-    // 1 - needed temperature
-    // 2 - motor speed
-    // 3 - motor start|stop
-    // 4 - motor direction
-    if (save==0){
+
+void displayMainScreen() {
+  lcd.clear();
+  
+  lcd.setCursor(0, 0);
+  lcd.print("Tc: ");
+  lcd.setCursor(4, 0);
+  lcd.print(tempCurrent);
+  lcd.print(" Ts: ");
+  lcd.setCursor(10, 0);
+  lcd.print(tempTarget);
+  
+  lcd.setCursor(15, 0);
+  lcd.write(0);
+  lcd.write(1);
+  
+  lcd.setCursor(0, 1);
+  lcd.print("Spd: ");
+  lcd.setCursor(5, 1);
+  lcd.print(motorSpeed);
+  lcd.print(" Act: ");
+  lcd.setCursor(12, 1);
+  lcd.print(motorRunning ? "ON " : "OFF");
+  
+  lcd.setCursor(0, 2);
+  lcd.print("Dir: ");
+  lcd.setCursor(5, 2);
+  lcd.print(motorDirection ? "BWD" : "FWD");
+  lcd.print("  ");
+  lcd.setCursor(10, 2);
+  lcd.print("PID TUNE");
+  
+  lcd.setCursor(0, 3);
+  lcd.print("Htr: ");
+  lcd.setCursor(5, 3);
+  lcd.print(heaterEnabled ? "ON " : "OFF");
+  lcd.print("                    ");
+}
+
+void updateDisplay() {
+  lcd.setCursor(4, 0);
+  lcd.print("   ");
+  lcd.setCursor(4, 0);
+  lcd.print(tempCurrent);
+  
+  if (menuState == STATE_VIEW) {
+    lcd.noBlink();
+    lcd.cursor();
     
-      if (t_current>=300 || t_current<=0){
-        //stop heating
-      }
-      lcd.noBlink();
-      lcd.noCursor();
-      lcd.setCursor(4,0);
-      lcd.print("   ");
-      lcd.setCursor(4,0);
-      lcd.print(t_current);
-      Serial.println(t_current);
+    switch (cursorPos) {
+      case CURSOR_TARGET_TEMP:
+        lcd.setCursor(10, 0);
+        break;
+      case CURSOR_MOTOR_SPEED:
+        lcd.setCursor(5, 1);
+        break;
+      case CURSOR_MOTOR_STATE:
+        lcd.setCursor(12, 1);
+        break;
+      case CURSOR_MOTOR_DIR:
+        lcd.setCursor(5, 2);
+        break;
+      case CURSOR_AUTOTUNE:
+        lcd.setCursor(10, 2);
+        break;
+      case CURSOR_HEATER_STATE:
+        lcd.setCursor(5, 3);
+        break;
     }
-    //change needed temperature
-    if (save==1){
-      
-      if (plus==1){
-        t_set+=step_val;
-      }
-      if (plus==0){
-        t_set-=step_val;
-      }
-      if (t_set>=300){
-        t_set=300;
-      }
-      if (t_set<=0){
-        t_set=0;
-      }
-
-      lcd.setCursor(4,1);
-      lcd.print("   ");
-      lcd.setCursor(4,1);
-      lcd.print(t_set);
-      Serial.println("+++++Set needing temp ok");
+  } else {
+    lcd.blink();
+    lcd.cursor();
+    
+    switch (menuState) {
+      case STATE_EDIT_TEMP:
+        lcd.setCursor(10, 0);
+        break;
+      case STATE_EDIT_SPEED:
+        lcd.setCursor(5, 1);
+        break;
+      case STATE_EDIT_MOTOR_STATE:
+        lcd.setCursor(12, 1);
+        break;
+      case STATE_EDIT_MOTOR_DIR:
+        lcd.setCursor(5, 2);
+        break;
+      case STATE_AUTOTUNE:
+        lcd.setCursor(10, 2);
+        break;
+      case STATE_EDIT_HEATER:
+        lcd.setCursor(5, 3);
+        break;
     }
-    //change motor speed
-    if (save==2){
-      if (plus==1){
-        motor_speed+=step_val;
-      }
-      if (plus==0){
-        motor_speed-=step_val;
-      } 
-      if (motor_speed>=10000){
-        motor_speed=10000;
-      }
-      if (motor_speed<=0){
-        motor_speed=0;
-      }
-      if (motor_state==1){
-        if (motor_dir==0){
-          stepper.setSpeed(motor_speed);
-        }else{
-          stepper.setSpeed(-motor_speed);
-        }
-      }
-      lcd.setCursor(16,0);
-      lcd.print("   ");
-      lcd.setCursor(16,0);
-      lcd.print(motor_speed);
-      Serial.println("+++++Set motor speed ok");
-    }
-    //change motor state
-    if (save==3){
-
-      if (motor_state>=1){
-        motor_state=0;
-        motor_state_text="OFF";
-        // motor_state=0;
-        // motor_state_text="OFF";
-        stepper.disable();        
-      }else{
-        // motor_state_temp=1;
-        // motor_state_temp_text="ON";
-        motor_state=1;
-        motor_state_text="ON";
-        stepper.enable();
-      }
-
-      lcd.setCursor(16,1);
-      lcd.print("   ");
-      lcd.setCursor(16,1);
-      lcd.print(motor_state_text);
-      Serial.println("+++++Set motor state ok");
-    }
-    if (save==4){
-
-      if (motor_dir>=1){
-        // motor_dir_temp=0;
-        // motor_dir_temp_text="FWD";
-        motor_dir=0;
-        motor_dir_text="FWD";
-      }else{
-        // motor_dir_temp=1;
-        // motor_dir_temp_text="BWD";
-        motor_dir=1;
-        motor_dir_text="BWD";
-      }
-
-      lcd.setCursor(16,2);
-      lcd.print("   ");
-      lcd.setCursor(16,2);
-      lcd.print(motor_dir_text);
-      Serial.println("+++++Set motor direction ok");
-    }
+  }
 }
-void loop()
-{ 
-  if (autotune==1){
-    tuner.setParameters(NORMAL, t_set, 15, 5000, 0.08, 15000, 500);
-    tuner.setInput(therm.getTempAverage());
-    tuner.compute();
-    analogWrite(MOS_PIN, tuner.getOutput());
-    if (tuner.getAccuracy() > 95){
-      autotune=0;
-      // выводит в порт текстовые отладочные данные, включая коэффициенты
-      tuner.debugText();
-      lcd.setCursor(0,3);
-      lcd.print("                    ");//0,2 - set Temperature setting
-      lcd.setCursor(0,3);
-      lcd.print(tuner.getPID_p());//0,2 - set Temperature setting
-      lcd.setCursor(6,3);
-      lcd.print(tuner.getPID_i());//0,2 - set Temperature setting
-      lcd.setCursor(12,3);
-      lcd.print(tuner.getPID_d());//0,2 - set Temperature setting
 
-      regulator.Kp = tuner.getPID_p();
-      regulator.Ki = tuner.getPID_i();
-      regulator.Kd = tuner.getPID_d();
-    }
-  }  
-  //t_current=therm.getTemp();
-  t_current=therm.getTempAverage();
-  unsigned long currentMillis = millis();
+void displayPIDValues(float p, float i, float d) {
+  lcd.setCursor(0, 3);
+  lcd.print("P=");
+  lcd.print(p, 2);
+  lcd.print(" I=");
+  lcd.print(i, 2);
+  lcd.print(" D=");
+  lcd.print(d, 2);
+}
+
+void displayMessage(const char* msg) {
+  lcd.setCursor(0, 3);
+  lcd.print("                    ");
+  lcd.setCursor(0, 3);
+  lcd.print(msg);
+}
+
+// ============================================================================
+// PARAMETER CHANGE FUNCTIONS
+// ============================================================================
+
+void changeTargetTemp(int delta) {
+  tempTarget += delta;
+  tempTarget = constrain(tempTarget, TEMP_MIN, TEMP_MAX);
   
-  //проверяем не прошел ли нужный интервал, если прошел то
-  if(currentMillis - previousMillis > interval) {
-    // сохраняем время последнего переключения
-    previousMillis = currentMillis; 
-    change_params(0,100,0);  
-  }
-  if (autotune!=1){
-    regulator.setpoint = t_set;
-    regulator.input = t_current;   // сообщаем регулятору текущую температуру
-    // getResultTimer возвращает значение для управляющего устройства
-    // (после вызова можно получать это значение как regulator.output)
-    // обновление происходит по встроенному таймеру на millis()
-    //regulator.getResult();
-    analogWrite(D0, regulator.getResultTimer());  // отправляем на мосфет
-  }
-  if (motor_state == 1){
-    if (motor_dir == 0){
-      stepper.setSpeed(motor_speed);
-    }else{
-      stepper.setSpeed(-motor_speed);
+  lcd.setCursor(10, 0);
+  lcd.print("   ");
+  lcd.setCursor(10, 0);
+  lcd.print(tempTarget);
+  
+  Serial.print("Target temp: ");
+  Serial.println(tempTarget);
+}
+
+void changeMotorSpeed(int delta) {
+  motorSpeed += delta;
+  motorSpeed = constrain(motorSpeed, SPEED_MIN, SPEED_MAX);
+  
+  if (motorRunning) {
+    if (!motorDirection) {
+      stepper.setSpeed(motorSpeed);
+    } else {
+      stepper.setSpeed(-motorSpeed);
     }
-  }else{
+  }
+  
+  lcd.setCursor(5, 1);
+  lcd.print("     ");
+  lcd.setCursor(5, 1);
+  lcd.print(motorSpeed);
+  
+  Serial.print("Motor speed: ");
+  Serial.println(motorSpeed);
+}
+
+void toggleMotorState() {
+  motorRunning = !motorRunning;
+  
+  if (motorRunning) {
+    stepper.enable();
+    if (!motorDirection) {
+      stepper.setSpeed(motorSpeed);
+    } else {
+      stepper.setSpeed(-motorSpeed);
+    }
+  } else {
     stepper.disable();
   }
   
+  lcd.setCursor(12, 1);
+  lcd.print(motorRunning ? "ON " : "OFF");
+  
+  Serial.print("Motor state: ");
+  Serial.println(motorRunning ? "ON" : "OFF");
+}
 
+void toggleMotorDirection() {
+  stepper.brake();
+  delay(100);
+  
+  motorDirection = !motorDirection;
+  
+  if (motorRunning) {
+    if (!motorDirection) {
+      stepper.setSpeed(motorSpeed);
+    } else {
+      stepper.setSpeed(-motorSpeed);
+    }
+  }
+  
+  lcd.setCursor(5, 2);
+  lcd.print(motorDirection ? "BWD" : "FWD");
+  
+  Serial.print("Motor direction: ");
+  Serial.println(motorDirection ? "BWD" : "FWD");
+}
 
-  if (save==100){
-    lcd.noBlink();
-    lcd.cursor();
+void toggleHeaterState() {
+  heaterEnabled = !heaterEnabled;
+  
+  if (!heaterEnabled) {
+    analogWrite(PIN_MOSFET, 0);
   }
-  for (int i = 0; i < BTN_AMOUNT; i++) btn[i].tick();
+  
+  lcd.setCursor(5, 3);
+  lcd.print(heaterEnabled ? "ON " : "OFF");
+  
+  Serial.print("Heater state: ");
+  Serial.println(heaterEnabled ? "ON" : "OFF");
+}
 
-  if (cursor==1){
-      lcd.setCursor(3, 1);
-  }
-  if (cursor==2){
-      lcd.setCursor(15, 0);
-  }
-  if (cursor==3){
-      lcd.setCursor(15, 1);
-  }
-  if (cursor==4){
-      lcd.setCursor(15, 2);
-  }
+void startAutotune() {
+  autotuneActive = true;
+  tuner.setParameters(NORMAL, tempTarget, 15, 5000, 0.08, 15000, 500);
+  displayMessage("Autotuning...");
+  Serial.println("Starting PID autotune");
+}
 
-  if (cursor==5){
-      lcd.setCursor(0, 2);
-  }
-    //listen button held
+void completeAutotune() {
+  autotuneActive = false;
+  
+  float p = tuner.getPID_p();
+  float i = tuner.getPID_i();
+  float d = tuner.getPID_d();
+  
+  regulator.Kp = p;
+  regulator.Ki = i;
+  regulator.Kd = d;
+  
+  displayPIDValues(p, i, d);
+  
+  tuner.debugText();
+  
+  saveSettings();
+  
+  Serial.println("Autotune completed");
+}
+
+// ============================================================================
+// MENU STATE MACHINE HANDLERS
+// ============================================================================
+
+void handleViewMode() {
+  lcd.noBlink();
+  lcd.cursor();
+}
+
+void handleEditMode() {
+  lcd.blink();
+  lcd.cursor();
+}
+
+// ============================================================================
+// BUTTON HANDLERS
+// ============================================================================
+
+void handleEnterButton() {
   if (btn[0].held()) {
-    Serial.println("hold enter");
-    //enter change mode
-    if (save==100){
-      Serial.println("hold enter and save==100");
-      save=cursor;
-      lcd.blink(); 
-      lcd.cursor();
-    }else{
-      //enter save mode
-
-      if(save==1){
-        //Serial.println("hold enter and save==1");
-        //t_set=t_set_temp;
-        lcd.setCursor(4,1);
-        lcd.print("   ");
-        lcd.setCursor(4,1);
-        lcd.print(t_set);
-        lcd.cursor();
-        lcd.blink();
-        delay(3000);
+    if (menuState != STATE_VIEW) {
+      pendingConfirmation = true;
+      lastConfirmTime = millis();
+      
+      switch (menuState) {
+        case STATE_EDIT_TEMP:
+          displayMessage("Temp saved");
+          saveSettings();
+          break;
+        case STATE_EDIT_SPEED:
+          displayMessage("Speed saved");
+          saveSettings();
+          break;
+        case STATE_EDIT_MOTOR_STATE:
+          displayMessage("Motor saved");
+          saveSettings();
+          break;
+        case STATE_EDIT_MOTOR_DIR:
+          displayMessage("Dir saved");
+          saveSettings();
+          break;
+        case STATE_EDIT_HEATER:
+          displayMessage("Heater saved");
+          break;
       }
-      if(save==2){
-        //Serial.println("hold enter and save==2");
-        //motor_speed=motor_speed_temp;
-        if (motor_state==1){
-          if (motor_dir==0){
-            stepper.setSpeed(motor_speed);
-          }else{
-            stepper.setSpeed(-motor_speed);
-          }
-        }
-        
-        lcd.setCursor(16,0);
-        lcd.print("   ");
-        lcd.setCursor(16,0);
-        lcd.print(motor_speed);
-        lcd.cursor();
-        lcd.blink();
-        delay(3000);
-      }
-      if(save==3){
-        //Serial.println("hold enter and save==3");
-        //motor_state=motor_state_temp;
-        //motor_state_text=motor_state_temp_text;
-        if (motor_state==0){
-          stepper.stop();
-          stepper.disable();
-        }else{
-          stepper.enable();
-        }
-        lcd.setCursor(16,1);
-        lcd.print("   ");
-        lcd.setCursor(16,1);
-        lcd.print(motor_state_text);
-        lcd.cursor();
-        lcd.blink();
-        delay(3000);
-      }
-      if(save==4){
-        //Serial.println("hold enter and save==4");
-        //motor_dir=motor_dir_temp;
-        //motor_dir_text=motor_dir_temp_text;
-        //тормозим перед сменой направления
-        stepper.brake();
-        lcd.setCursor(16,2);
-        lcd.print("   ");
-        lcd.setCursor(16,2);
-        lcd.print(motor_dir_text);
-        lcd.cursor();
-        lcd.blink();
-        delay(3000);
-      }
-
-      if (save==5){
-        autotune=1;
-        lcd.setCursor(0,2);
-        lcd.cursor();
-        lcd.blink();
-        delay(3000);
-      }
-      lcd.noBlink(); 
-      lcd.cursor();
-      //lcd.blink();
-      save=100;
-    } 
+      
+      delay(CONFIRM_DELAY);
+      menuState = STATE_VIEW;
+      pendingConfirmation = false;
+    }
   }
-  //listen button click
+  
   if (btn[0].click()) {
-    //Serial.println("press enter");
-    if(save!=100){
-      save=100;
-      // t_current_temp=t_current;
-      // t_set_temp=t_set;
-      // motor_speed_temp=motor_speed;
-      // motor_state_temp=motor_state;
-      // motor_state_temp_text=motor_state_text;
-      // motor_dir_temp=motor_dir;
-      // motor_dir_temp_text=motor_dir_text;
-      lcd.setCursor(4,0);
-      lcd.print("   ");
-      lcd.setCursor(4,0);
-      lcd.print(t_current);
-      lcd.setCursor(4,1);
-      lcd.print("   ");
-      lcd.setCursor(4,1);
-      lcd.print(t_set);
-      lcd.setCursor(16,0);
-      lcd.print("   ");
-      lcd.setCursor(16,0);
-      lcd.print(motor_speed);
-      lcd.setCursor(16,1);
-      lcd.print("   ");
-      lcd.setCursor(16,1);
-      lcd.print(motor_state_text);
-      lcd.setCursor(16,2);
-      lcd.print("   ");
-      lcd.setCursor(16,2);
-      lcd.print(motor_dir_text);
+    if (menuState == STATE_VIEW) {
+      switch (cursorPos) {
+        case CURSOR_TARGET_TEMP:
+          menuState = STATE_EDIT_TEMP;
+          break;
+        case CURSOR_MOTOR_SPEED:
+          menuState = STATE_EDIT_SPEED;
+          break;
+        case CURSOR_MOTOR_STATE:
+          menuState = STATE_EDIT_MOTOR_STATE;
+          break;
+        case CURSOR_MOTOR_DIR:
+          menuState = STATE_EDIT_MOTOR_DIR;
+          break;
+        case CURSOR_AUTOTUNE:
+          menuState = STATE_AUTOTUNE;
+          startAutotune();
+          break;
+        case CURSOR_HEATER_STATE:
+          menuState = STATE_EDIT_HEATER;
+          break;
+      }
+    } else {
+      menuState = STATE_VIEW;
+      displayMessage("");
     }
-    cursor++;
-    if (cursor>5){
-      cursor=1;
+    
+    if (menuState == STATE_VIEW) {
+      cursorPos++;
+      if (cursorPos > CURSOR_HEATER_STATE) {
+        cursorPos = CURSOR_TARGET_TEMP;
+      }
     }
-  }  
-  //TODO: how to know how much click done before held?
-  //int clicks1 = btn[1].hasClicks();
-  //int clicks2 = btn[2].hasClicks();
-  if (btn[1].step(2) && save!=100) {
-    //Serial.println("press right and save!=100 and HOLD");
-    //Serial.println(clicks1);
-    change_params(save,1,3);  
   }
-  if (btn[2].step(2) && save!=100) {
-    //Serial.println("press right and save!=100 and HOLD");
-    change_params(save,0,3);  
-  }
-  if (btn[1].step(4) && save!=100) {
-    //Serial.println("press right and save!=100 and HOLD");
-    //Serial.println(clicks1);
-    change_params(save,1,4);  
-  }
-  if (btn[2].step(4) && save!=100) {
-    //Serial.println("press right and save!=100 and HOLD");
-    change_params(save,0,4);  
-  }
-  if (btn[1].click() && save!=100) {
-    //Serial.println("press right and save!=100");
-    change_params(save,1,1);  
-  } 
-  if (btn[2].click() && save!=100) {
-    //Serial.println("press left and save!=100");
-    change_params(save,0,1);  
-  } 
+}
 
+void handleRightButton() {
+  if (menuState == STATE_VIEW) {
+    return;
+  }
+  
+  if (btn[1].step(2)) {
+    switch (menuState) {
+      case STATE_EDIT_TEMP:
+        changeTargetTemp(5);
+        break;
+      case STATE_EDIT_SPEED:
+        changeMotorSpeed(10);
+        break;
+    }
+  } else if (btn[1].step(4)) {
+    switch (menuState) {
+      case STATE_EDIT_TEMP:
+        changeTargetTemp(3);
+        break;
+      case STATE_EDIT_SPEED:
+        changeMotorSpeed(5);
+        break;
+    }
+  } else if (btn[1].click()) {
+    switch (menuState) {
+      case STATE_EDIT_TEMP:
+        changeTargetTemp(1);
+        break;
+      case STATE_EDIT_SPEED:
+        changeMotorSpeed(1);
+        break;
+      case STATE_EDIT_MOTOR_STATE:
+        toggleMotorState();
+        break;
+      case STATE_EDIT_MOTOR_DIR:
+        toggleMotorDirection();
+        break;
+      case STATE_EDIT_HEATER:
+        toggleHeaterState();
+        break;
+    }
+  }
+}
+
+void handleLeftButton() {
+  if (menuState == STATE_VIEW) {
+    return;
+  }
+  
+  if (btn[2].step(2)) {
+    switch (menuState) {
+      case STATE_EDIT_TEMP:
+        changeTargetTemp(-5);
+        break;
+      case STATE_EDIT_SPEED:
+        changeMotorSpeed(-10);
+        break;
+    }
+  } else if (btn[2].step(4)) {
+    switch (menuState) {
+      case STATE_EDIT_TEMP:
+        changeTargetTemp(-3);
+        break;
+      case STATE_EDIT_SPEED:
+        changeMotorSpeed(-5);
+        break;
+    }
+  } else if (btn[2].click()) {
+    switch (menuState) {
+      case STATE_EDIT_TEMP:
+        changeTargetTemp(-1);
+        break;
+      case STATE_EDIT_SPEED:
+        changeMotorSpeed(-1);
+        break;
+      case STATE_EDIT_MOTOR_STATE:
+        toggleMotorState();
+        break;
+      case STATE_EDIT_MOTOR_DIR:
+        toggleMotorDirection();
+        break;
+      case STATE_EDIT_HEATER:
+        toggleHeaterState();
+        break;
+    }
+  }
+}
+
+// ============================================================================
+// MAIN CONTROL FUNCTIONS
+// ============================================================================
+
+void updateTemperature() {
+  tempCurrent = therm.getTempAverage();
+}
+
+void controlHeater() {
+  if (autotuneActive) {
+    tuner.setInput(tempCurrent);
+    tuner.compute();
+    analogWrite(PIN_MOSFET, tuner.getOutput());
+    
+    if (tuner.getAccuracy() > 95) {
+      completeAutotune();
+    }
+  } else if (heaterEnabled) {
+    regulator.setpoint = tempTarget;
+    regulator.input = tempCurrent;
+    int output = regulator.getResultTimer();
+    output = constrain(output, 0, 255);
+    analogWrite(PIN_MOSFET, output);
+  } else {
+    analogWrite(PIN_MOSFET, 0);
+  }
+}
+
+void controlMotor() {
+  if (motorRunning) {
+    if (!motorDirection) {
+      stepper.setSpeed(motorSpeed);
+    } else {
+      stepper.setSpeed(-motorSpeed);
+    }
+  } else {
+    stepper.disable();
+  }
+}
+
+// ============================================================================
+// EEPROM FUNCTIONS
+// ============================================================================
+
+void saveSettings() {
+  EEPROM.begin(32);
+  
+  EEPROM.write(EEPROM_MAGIC_ADDR, EEPROM_MAGIC);
+  
+  EEPROM.put(EEPROM_ADDR_TEMP_TARGET, tempTarget);
+  EEPROM.put(EEPROM_ADDR_MOTOR_SPEED, motorSpeed);
+  EEPROM.put(EEPROM_ADDR_MOTOR_DIR, motorDirection);
+  
+  float p = regulator.Kp;
+  float i = regulator.Ki;
+  float d = regulator.Kd;
+  EEPROM.put(EEPROM_ADDR_PID_P, p);
+  EEPROM.put(EEPROM_ADDR_PID_I, i);
+  EEPROM.put(EEPROM_ADDR_PID_D, d);
+  
+  EEPROM.end();
+  
+  Serial.println("Settings saved to EEPROM");
+}
+
+void loadSettings() {
+  EEPROM.begin(32);
+  
+  byte magic = EEPROM.read(EEPROM_MAGIC_ADDR);
+  
+  if (magic == EEPROM_MAGIC) {
+    int loadedTemp;
+    int loadedSpeed;
+    bool loadedDir;
+    float loadedP, loadedI, loadedD;
+    
+    EEPROM.get(EEPROM_ADDR_TEMP_TARGET, loadedTemp);
+    EEPROM.get(EEPROM_ADDR_MOTOR_SPEED, loadedSpeed);
+    EEPROM.get(EEPROM_ADDR_MOTOR_DIR, loadedDir);
+    EEPROM.get(EEPROM_ADDR_PID_P, loadedP);
+    EEPROM.get(EEPROM_ADDR_PID_I, loadedI);
+    EEPROM.get(EEPROM_ADDR_PID_D, loadedD);
+    
+    if (loadedTemp >= TEMP_MIN && loadedTemp <= TEMP_MAX) {
+      tempTarget = loadedTemp;
+    }
+    
+    if (loadedSpeed >= SPEED_MIN && loadedSpeed <= SPEED_MAX) {
+      motorSpeed = loadedSpeed;
+    }
+    
+    motorDirection = loadedDir;
+    
+    if (loadedP > 0 && loadedI > 0 && loadedD > 0) {
+      regulator.Kp = loadedP;
+      regulator.Ki = loadedI;
+      regulator.Kd = loadedD;
+    }
+    
+    Serial.println("Settings loaded from EEPROM");
+  } else {
+    Serial.println("No valid settings in EEPROM, using defaults");
+  }
+  
+  EEPROM.end();
+}
+
+// ============================================================================
+// SETUP AND LOOP
+// ============================================================================
+
+void setup() {
+  Serial.begin(115200);
+  
+  displayInit();
+  displayWelcome();
+  displayMainScreen();
+  
+  btn[0].setPins(INPUT_PULLUP, E_BTN);
+  btn[1].setPins(INPUT_PULLUP, R_BTN);
+  btn[2].setPins(INPUT_PULLUP, L_BTN);
+  
+  if (ITimer.attachInterruptInterval(100, TimerHandler)) {
+    Serial.print(F("Starting ITimer OK, millis() = "));
+    Serial.println(millis());
+  } else {
+    Serial.println(F("Can't set ITimer correctly"));
+  }
+  
+  regulator.setDirection(NORMAL);
+  regulator.setLimits(0, 255);
+  regulator.setpoint = tempTarget;
+  
+  loadSettings();
+  
+  motorRunning = false;
+  heaterEnabled = false;
+  
+  Serial.println("+++++ Setup complete");
+}
+
+void loop() {
+  unsigned long currentMillis = millis();
+  
+  if (currentMillis - lastTempUpdate >= UPDATE_TEMP_INTERVAL) {
+    lastTempUpdate = currentMillis;
+    updateTemperature();
+    updateDisplay();
+  }
+  
+  controlHeater();
+  controlMotor();
+  
+  for (int i = 0; i < BTN_AMOUNT; i++) {
+    btn[i].tick();
+  }
+  
+  handleEnterButton();
+  handleRightButton();
+  handleLeftButton();
+  
+  if (menuState == STATE_VIEW) {
+    handleViewMode();
+  } else {
+    handleEditMode();
+  }
+  
+  updateDisplay();
 }
